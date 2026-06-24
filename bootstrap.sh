@@ -2,8 +2,11 @@
 # =============================================================================
 # bootstrap.sh — Amo Jonathan (Shudiak)
 # =============================================================================
-# One-shot installer para dejar un Rocky Linux 8.10 fresh IDÉNTICO a netwise-sed.
+# One-shot installer para dejar un Rocky Linux 8.x/9.x/10.x fresh IDÉNTICO a netwise-sed.
 # Replica el estado del server de referencia (100.82.36.22) tras install manual.
+#
+# Soportado: Rocky Linux 8.9+, 9.x, 10.x (incluye Rocky 10.2)
+# Auto-detecta DNF4 vs DNF5, EPEL estándar vs epel-next, paquetes condicionales.
 #
 # Paquetes instalados:
 #   - Sistema:  zsh, git, curl, wget, vim, tmux, htop, gcc, make, nc, nmap
@@ -11,7 +14,7 @@
 #   - Neovim 0.12.3 + LazyVim (full IDE con 30+ plugins)
 #   - Docker 26 + docker compose plugin
 #   - Tailscale 1.98+ (cliente VPN para tailnet)
-#   - xclip + xorg-x11-xauth (clipboard + X11 forwarding)
+#   - xclip + xorg-x11-xauth (solo si hay display gráfico)
 #
 # Configuraciones aplicadas:
 #   - SELinux: respeta Enforcing, configura contextos para Docker volumes
@@ -121,7 +124,12 @@ header "Habilitando EPEL"
 if rpm -q epel-release &>/dev/null; then
   info "EPEL ya instalado"
 else
-  dnf install -y epel-release
+  # Rocky 9+ requiere también epel-next para algunos paquetes
+  if [[ $OS_MAJOR -ge 9 ]]; then
+    $PM install -y epel-release epel-next-release 2>/dev/null || $PM install -y epel-release
+  else
+    $PM install -y epel-release
+  fi
   success "EPEL habilitado"
 fi
 
@@ -132,20 +140,48 @@ PACKAGES_SYSTEM=(
   git curl wget tar gzip ca-certificates
   zsh vim tmux htop nc nmap
   gcc make
-  xclip xorg-x11-xauth
   bind-utils
   rsync
   which
 )
 
-# Detectar package manager
-if command -v dnf &>/dev/null; then
-  PM="dnf"
+# xclip + xorg-x11-xauth solo si hay display gráfico (X11 o Wayland)
+# En Rocky 10.x con Wayland, X11 viene via XWayland. En servidor headless no aplican.
+if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] || systemctl is-active --quiet graphical.target 2>/dev/null; then
+  PACKAGES_SYSTEM+=(xclip xorg-x11-xauth)
+  info "Display gráfico detectado — añadiendo xclip + xorg-x11-xauth"
+else
+  info "Sin display gráfico — omitiendo xclip + xorg-x11-xauth"
+fi
+
+# Detectar package manager y versión
+if command -v dnf5 &>/dev/null; then
+  PM="dnf5"
+  DNF_VERSION="5"
+elif command -v dnf &>/dev/null; then
+  # dnf puede ser DNF4 (alias) o DNF5 (real)
+  if dnf --version 2>/dev/null | head -1 | grep -q "dnf5"; then
+    PM="dnf5"
+    DNF_VERSION="5"
+  else
+    PM="dnf"
+    DNF_VERSION="4"
+  fi
 elif command -v yum &>/dev/null; then
   PM="yum"
+  DNF_VERSION="4"
 else
   error "Ni dnf ni yum disponibles. OS no soportado."
 fi
+info "Package manager: $PM (DNF$DNF_VERSION)"
+
+# Detectar versión de OS (Rocky/RHEL major version)
+OS_MAJOR="0"
+if [[ -f /etc/os-release ]]; then
+  . /etc/os-release
+  OS_MAJOR="${VERSION_ID%%.*}"
+fi
+info "OS major version: $OS_MAJOR"
 
 info "Instalando: ${PACKAGES_SYSTEM[*]}"
 $PM install -y "${PACKAGES_SYSTEM[@]}"
@@ -202,9 +238,18 @@ if [[ $INSTALL_DOCKER == true ]]; then
   if command -v docker &>/dev/null; then
     info "Docker ya instalado: $(docker --version)"
   else
-    dnf install -y dnf-utils
-    dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
-    dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    # dnf-utils solo existe en DNF4; en DNF5 viene integrado
+    if [[ $DNF_VERSION == "4" ]]; then
+      $PM install -y dnf-utils
+    fi
+    # Sintaxis diferente para DNF5: addrepo sin guiones, --save para guardar
+    if [[ $DNF_VERSION == "5" ]]; then
+      $PM config-manager addrepo --save --from-repofile="https://download.docker.com/linux/rhel/docker-ce.repo" 2>/dev/null \
+        || $PM config-manager addrepo "https://download.docker.com/linux/rhel/docker-ce.repo"
+    else
+      $PM config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+    fi
+    $PM install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     systemctl enable --now docker
     success "Docker instalado y habilitado"
   fi
