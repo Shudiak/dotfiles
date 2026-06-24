@@ -2,27 +2,40 @@
 # =============================================================================
 # bootstrap.sh — Amo Jonathan (Shudiak)
 # =============================================================================
-# One-shot installer para Rocky Linux 8.9 / RHEL 8 / AlmaLinux 8 fresh.
-# Deja el sistema listo para producción con:
-#   - zsh + Oh-My-Zsh + plugins
-#   - Neovim 0.12+ + LazyVim (full IDE)
-#   - git, docker, docker-compose
-#   - Dotfiles del repo (lazyvim config, .zshrc, aliases)
-#   - SSH key generation + GitHub auth
+# One-shot installer para dejar un Rocky Linux 8.10 fresh IDÉNTICO a netwise-sed.
+# Replica el estado del server de referencia (100.82.36.22) tras install manual.
 #
-# Uso (primer inicio del SO, conectado a internet):
+# Paquetes instalados:
+#   - Sistema:  zsh, git, curl, wget, vim, tmux, htop, gcc, make, nc, nmap
+#   - Oh-My-Zsh + plugins: zsh-autosuggestions, zsh-syntax-highlighting, fast-syntax-highlighting
+#   - Neovim 0.12.3 + LazyVim (full IDE con 30+ plugins)
+#   - Docker 26 + docker compose plugin
+#   - Tailscale 1.98+ (cliente VPN para tailnet)
+#   - xclip + xorg-x11-xauth (clipboard + X11 forwarding)
+#
+# Configuraciones aplicadas:
+#   - SELinux: respeta Enforcing, configura contextos para Docker volumes
+#   - DNS: workaround para Tailscale (8.8.8.8 + 1.1.1.1 + 100.100.100.100)
+#   - TZ: America/Bogota
+#   - zsh como shell default
+#   - Dotfiles via symlinks (LazyVim config + .zshrc agnoster + aliases)
+#
+# Uso (primer inicio del SO, conectado a internet, como root):
 #
 #   sh -c "$(curl -fsSL https://raw.githubusercontent.com/Shudiak/dotfiles/master/bootstrap.sh)"
 #
-# Opciones:
-#   --no-docker      No instala Docker
-#   --no-zsh         No instala zsh (deja bash)
-#   --no-nvim        No instala Neovim
-#   --neovim-version VERSION   v0.12.1 | stable | nightly (default: v0.12.3)
-#   --ssh-keygen     Genera nueva SSH key ED25519 y la muestra al final
-#   --help           Mostrar ayuda
+# Flags opcionales:
+#   --no-docker         No instala Docker
+#   --no-zsh            No instala zsh (deja bash)
+#   --no-nvim           No instala Neovim
+#   --no-tailscale      No instala Tailscale
+#   --no-dns-fix        No aplica el workaround DNS
+#   --ssh-keygen        Genera SSH key ED25519 y la muestra al final
+#   --tailscale-key KEY Tailscale auth key pre-auth (evita login interactivo)
+#   --neovim-version VER  v0.12.3 | stable | nightly (default v0.12.3)
+#   -h | --help         Ayuda
 #
-# Re-ejecutable: detecta qué ya está instalado y lo salta.
+# Re-ejecutable: detecta software ya instalado y lo salta.
 # =============================================================================
 
 set -euo pipefail
@@ -51,19 +64,25 @@ header()  { echo -e "\n${BOLD}${CYAN}==> $*${NC}\n"; }
 INSTALL_DOCKER=true
 INSTALL_ZSH=true
 INSTALL_NVIM=true
+INSTALL_TAILSCALE=true
+APPLY_DNS_FIX=true
 GENERATE_SSH=false
 NVIM_VERSION="v0.12.3"
+TAILSCALE_AUTH_KEY=""
 
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --no-docker)      INSTALL_DOCKER=false; shift ;;
-    --no-zsh)         INSTALL_ZSH=false; shift ;;
-    --no-nvim)        INSTALL_NVIM=false; shift ;;
-    --ssh-keygen)     GENERATE_SSH=true; shift ;;
-    --neovim-version) NVIM_VERSION="$2"; shift 2 ;;
+    --no-docker)        INSTALL_DOCKER=false; shift ;;
+    --no-zsh)           INSTALL_ZSH=false; shift ;;
+    --no-nvim)          INSTALL_NVIM=false; shift ;;
+    --no-tailscale)     INSTALL_TAILSCALE=false; shift ;;
+    --no-dns-fix)       APPLY_DNS_FIX=false; shift ;;
+    --ssh-keygen)       GENERATE_SSH=true; shift ;;
+    --tailscale-key)    TAILSCALE_AUTH_KEY="$2"; shift 2 ;;
+    --neovim-version)   NVIM_VERSION="$2"; shift 2 ;;
     -h|--help)
-      sed -n "2,30p" "$0"
+      sed -n "2,35p" "$0"
       exit 0 ;;
     *) error "Argumento desconocido: $1. Usa --help" ;;
   esac
@@ -73,47 +92,113 @@ done
 header "Pre-flight checks"
 
 if [[ $EUID -ne 0 ]]; then
-  error "Este script debe ejecutarse como root (sudo)"
+  error "Este script debe ejecutarse como root (sudo -i)"
 fi
 
-# Detectar distro
 if [[ -f /etc/os-release ]]; then
   . /etc/os-release
   info "OS detectado: ${PRETTY_NAME:-Linux desconocido}"
-else
-  warn "No se pudo detectar /etc/os-release. Continuando bajo riesgo."
+  if [[ "${ID:-}" != "rocky" && "${ID:-}" != "rhel" && "${ID:-}" != "almalinux" && "${ID:-}" != "centos" ]]; then
+    warn "OS no es Rocky/RHEL/Alma/CentOS. Algunas cosas pueden fallar."
+  fi
 fi
 
-# Internet
 if ! curl -fsS --max-time 5 https://github.com >/dev/null 2>&1; then
   error "Sin internet a GitHub. Verifica DNS (cat /etc/resolv.conf) y proxy."
 fi
 success "Internet OK"
 
-# Disco libre (mínimo 2GB)
 FREE_KB=$(df --output=avail / | tail -1)
 FREE_GB=$((FREE_KB / 1024 / 1024))
-if [[ $FREE_GB -lt 2 ]]; then
-  warn "Disco bajo: ${FREE_GB} GB libres (recomendado 2+ GB)"
+if [[ $FREE_GB -lt 3 ]]; then
+  warn "Disco bajo: ${FREE_GB} GB libres (recomendado 3+ GB)"
 fi
 success "Disco libre: ${FREE_GB} GB"
 
-# --- Instalar paquetes base ---
-header "Instalando paquetes base (git, curl, wget, tar, gzip)"
+# --- Habilitar EPEL (necesario para xclip, xauth, htop, tmux, nmap) ---
+header "Habilitando EPEL"
 
-PACKAGES_BASE="git curl wget tar gzip ca-certificates"
+if rpm -q epel-release &>/dev/null; then
+  info "EPEL ya instalado"
+else
+  dnf install -y epel-release
+  success "EPEL habilitado"
+fi
+
+# --- Instalar paquetes base del sistema ---
+header "Instalando paquetes base del sistema"
+
+PACKAGES_SYSTEM=(
+  git curl wget tar gzip ca-certificates
+  zsh vim tmux htop nc nmap
+  gcc make
+  xclip xorg-x11-xauth
+  bind-utils
+  rsync
+  which
+)
+
+# Detectar package manager
 if command -v dnf &>/dev/null; then
-  dnf install -y $PACKAGES_BASE
+  PM="dnf"
 elif command -v yum &>/dev/null; then
-  yum install -y $PACKAGES_BASE
+  PM="yum"
 else
   error "Ni dnf ni yum disponibles. OS no soportado."
 fi
+
+info "Instalando: ${PACKAGES_SYSTEM[*]}"
+$PM install -y "${PACKAGES_SYSTEM[@]}"
 success "Paquetes base instalados"
+
+# --- Tailscale ---
+if [[ $INSTALL_TAILSCALE == true ]]; then
+  header "Instalando Tailscale"
+  
+  if command -v tailscale &>/dev/null; then
+    info "Tailscale ya instalado: $(tailscale --version | head -1)"
+  else
+    info "Descargando script oficial de Tailscale..."
+    curl -fsSL https://tailscale.com/install.sh | sh
+    success "Tailscale instalado"
+  fi
+  
+  systemctl enable tailscaled
+  systemctl start tailscaled
+  sleep 2
+  
+  if tailscale status &>/dev/null; then
+    info "Tailscale ya autenticado"
+  else
+    info "Autenticando Tailscale..."
+    if [[ -n "$TAILSCALE_AUTH_KEY" ]]; then
+      tailscale up --authkey="$TAILSCALE_AUTH_KEY"
+      success "Tailscale autenticado con auth key"
+    else
+      warn "Tailscale requiere autenticación interactiva."
+      echo ""
+      echo -e "  ${BOLD}Para completar manualmente:${NC}"
+      echo -e "  ${CYAN}tailscale up${NC}"
+      echo ""
+      if [[ -t 0 ]]; then
+        (tailscale up --timeout=60s &)
+        sleep 5
+        if tailscale status &>/dev/null; then
+          success "Tailscale autenticado"
+        else
+          warn "Completa la autenticación manualmente con: tailscale up"
+        fi
+      else
+        warn "No hay TTY. Ejecuta: tailscale up"
+      fi
+    fi
+  fi
+fi
 
 # --- Docker (opcional) ---
 if [[ $INSTALL_DOCKER == true ]]; then
-  header "Instalando Docker + docker-compose"
+  header "Instalando Docker + compose plugin"
+  
   if command -v docker &>/dev/null; then
     info "Docker ya instalado: $(docker --version)"
   else
@@ -123,29 +208,52 @@ if [[ $INSTALL_DOCKER == true ]]; then
     systemctl enable --now docker
     success "Docker instalado y habilitado"
   fi
-else
-  info "Saltando instalación de Docker (--no-docker)"
+fi
+
+# --- DNS fix (para clones git via Tailscale) ---
+if [[ $APPLY_DNS_FIX == true ]]; then
+  header "Aplicando DNS fix (Tailscale workaround)"
+  
+  if [[ -f /etc/resolv.conf ]]; then
+    cp /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
+    
+    SEARCH_DOMAIN=""
+    if command -v tailscale &>/dev/null && tailscale status &>/dev/null; then
+      TAIL_DOMAIN=$(tailscale status --json 2>/dev/null | grep -oP '"MagicDNSSuffix":"[^"]+"' | cut -d\" -f4)
+      [[ -n "$TAIL_DOMAIN" ]] && SEARCH_DOMAIN="$TAIL_DOMAIN"
+    fi
+    
+    cat > /etc/resolv.conf <<DNSEOF
+# Managed by Jarvis bootstrap — DNS fix para Tailscale
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+nameserver 100.100.100.100
+DNSEOF
+    [[ -n "$SEARCH_DOMAIN" ]] && echo "search $SEARCH_DOMAIN" >> /etc/resolv.conf
+    success "DNS configurado: 8.8.8.8 + 1.1.1.1 + 100.100.100.100"
+    
+    if command -v tailscale &>/dev/null; then
+      tailscale set --accept-dns=false 2>&1 | head -1 || warn "No se pudo desactivar Tailscale DNS (no es crítico)"
+      info "Tailscale DNS management desactivado"
+    fi
+  fi
 fi
 
 # --- Zsh + Oh-My-Zsh ---
 if [[ $INSTALL_ZSH == true ]]; then
   header "Instalando Zsh + Oh-My-Zsh + plugins"
   
-  # zsh
   if ! command -v zsh &>/dev/null; then
-    dnf install -y zsh
+    $PM install -y zsh
   fi
   success "zsh: $(zsh --version)"
   
-  # Oh-My-Zsh
   if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
     info "Instalando Oh-My-Zsh..."
-    # Descarga no interactiva
     RUNZSH=no CHSH=no sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
   fi
   success "Oh-My-Zsh en $HOME/.oh-my-zsh"
   
-  # Plugins custom (no vienen en OMZ default)
   ZSH_CUSTOM="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
   PLUGINS=(
     "zsh-autosuggestions|https://github.com/zsh-users/zsh-autosuggestions"
@@ -161,10 +269,10 @@ if [[ $INSTALL_ZSH == true ]]; then
   done
   success "Plugins zsh instalados"
   
-  # Cambiar shell default a zsh
   CURRENT_SHELL=$(getent passwd "$USER" | cut -d: -f7)
   if [[ "$CURRENT_SHELL" != "$(command -v zsh)" ]]; then
-    chsh -s "$(command -v zsh)" "$USER"
+    chsh -s "$(command -v zsh)" "$USER" 2>/dev/null || \
+      warn "No se pudo cambiar shell default (ejecuta: chsh -s \$(which zsh))"
     info "Shell default cambiado a zsh (efectivo tras próximo login)"
   fi
 fi
@@ -194,13 +302,23 @@ fi
 git clone --depth 1 --branch "${GITHUB_BRANCH}" \
   "https://github.com/${GITHUB_USER}/${GITHUB_REPO}.git" "$DOTFILES_DIR"
 
-# Symlinks (stow-style)
 info "Creando symlinks para config files..."
 mkdir -p "$HOME/.config"
 [[ -f "$DOTFILES_DIR/.zshrc" ]] && ln -sf "$DOTFILES_DIR/.zshrc" "$HOME/.zshrc"
 [[ -d "$DOTFILES_DIR/.config/nvim" ]] && ln -sfn "$DOTFILES_DIR/.config/nvim" "$HOME/.config/nvim"
-
 success "Dotfiles aplicados (symlinks en ~/)"
+
+# --- SELinux: contexto para volúmenes Docker ---
+if command -v getenforce &>/dev/null && [[ "$(getenforce)" == "Enforcing" ]]; then
+  header "Configurando SELinux contexts para Docker"
+  
+  if [[ -d /home/docker ]]; then
+    info "Aplicando contexto container_file_t a /home/docker/"
+    chcon -R -t container_file_t /home/docker/ 2>/dev/null || \
+      warn "No se pudo aplicar SELinux (puede no ser necesario)"
+    success "SELinux configurado"
+  fi
+fi
 
 # --- SSH Key (opcional) ---
 if [[ $GENERATE_SSH == true ]]; then
@@ -234,17 +352,24 @@ ${GREEN}============================================${NC}
 ${GREEN}  Sistema configurado correctamente${NC}
 ${GREEN}============================================${NC}
 
-Próximos pasos:
-  1. ${CYAN}Reinicia la sesión${NC} (o ejecuta: ${CYAN}exec zsh${NC})
-  2. ${CYAN}Abre nvim${NC} — LazyVim instalará plugins automáticamente
-  3. ${CYAN}Verifica Docker${NC}: docker ps
-  4. ${CYAN}Tu dotfiles repo${NC}: ${DOTFILES_DIR}
+Software instalado:
+  - zsh $(zsh --version 2>&1 | awk '{print $2}')
+  - git $(git --version 2>&1 | awk '{print $3}')
+  - nvim $(nvim --version 2>&1 | head -1 | awk '{print $2}')
+  - docker $(docker --version 2>&1 | awk '{print $3}' | tr -d ',')
+  - tailscale $(tailscale --version 2>&1 | head -1 | awk '{print $1}')
 
-Dotfiles en:
+Dotfiles:
   ~/.zshrc         -> ${DOTFILES_DIR}/.zshrc
   ~/.config/nvim   -> ${DOTFILES_DIR}/.config/nvim
 
-Repositorio: https://github.com/${GITHUB_USER}/${GITHUB_REPO}
+Próximos pasos:
+  1. ${CYAN}Reinicia sesión${NC} (o exec zsh)
+  2. ${CYAN}nvim${NC} — LazyVim instala plugins automáticamente
+  3. Si Tailscale no se autenticó: ${CYAN}tailscale up${NC}
+  4. Verifica: ${CYAN}docker ps${NC}, ${CYAN}tailscale status${NC}
+
+Repo: https://github.com/${GITHUB_USER}/${GITHUB_REPO}
 SUMMARY
 
 success "Hecho. Bienvenido al sistema, ${USER}."
