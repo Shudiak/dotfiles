@@ -5,7 +5,7 @@
 # Soporta el build oficial para GLIBC antiguo de Neovim 0.12+
 #
 # Uso:
-#   curl -fsSL https://raw.githubusercontent.com/Shudiak/dotfiles/main/install-nvim.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Shudiak/dotfiles/master/install-nvim.sh | bash
 #   bash install-nvim.sh
 #   bash install-nvim.sh --version v0.12.1
 #   bash install-nvim.sh --version stable

@@ -12,7 +12,7 @@
 #
 # Uso (primer inicio del SO, conectado a internet):
 #
-#   sh -c "$(curl -fsSL https://raw.githubusercontent.com/Shudiak/dotfiles/main/bootstrap.sh)"
+#   sh -c "$(curl -fsSL https://raw.githubusercontent.com/Shudiak/dotfiles/master/bootstrap.sh)"
 #
 # Opciones:
 #   --no-docker      No instala Docker
@@ -30,7 +30,7 @@ set -euo pipefail
 # --- Constantes ---
 GITHUB_USER="Shudiak"
 GITHUB_REPO="dotfiles"
-GITHUB_BRANCH="main"
+GITHUB_BRANCH="master"
 RAW_URL="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
 
 # --- Colores ---
