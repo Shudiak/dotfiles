@@ -389,32 +389,126 @@ if [[ $GENERATE_SSH == true ]]; then
   fi
 fi
 
+# --- Verificaciones automáticas post-install ---
+header "Verificando instalación"
+
+VERIFY_FAILED=0
+
+# Test 1: Symlinks apuntan a archivos reales
+if [[ -L "$HOME/.zshrc" ]] && [[ -f "$(readlink -f "$HOME/.zshrc")" ]]; then
+  success "Symlink ~/.zshrc OK"
+else
+  warn "❌ ~/.zshrc symlink roto"
+  VERIFY_FAILED=$((VERIFY_FAILED + 1))
+fi
+
+if [[ -L "$HOME/.config/nvim" ]] && [[ -d "$(readlink -f "$HOME/.config/nvim")" ]]; then
+  success "Symlink ~/.config/nvim OK"
+else
+  warn "❌ ~/.config/nvim symlink roto"
+  VERIFY_FAILED=$((VERIFY_FAILED + 1))
+fi
+
+# Test 2: Docker daemon responde
+if command -v docker &>/dev/null; then
+  if docker info &>/dev/null 2>&1; then
+    success "Docker daemon responde"
+    # Test 3: docker run hello-world (descarga imagen pequeña ~13KB)
+    if systemctl is-active --quiet docker 2>/dev/null; then
+      info "Probando docker run hello-world..."
+      if docker run --rm hello-world &>/dev/null 2>&1; then
+        success "docker run hello-world OK"
+      else
+        warn "⚠️  docker run hello-world falló (puede ser falta de internet)"
+        VERIFY_FAILED=$((VERIFY_FAILED + 1))
+      fi
+    fi
+  else
+    warn "⚠️  Docker instalado pero daemon no responde (puede necesitar systemctl start docker)"
+    VERIFY_FAILED=$((VERIFY_FAILED + 1))
+  fi
+fi
+
+# Test 4: Neovim responde y plugins LazyVim accesibles
+if command -v nvim &>/dev/null; then
+  NVIM_VER=$(nvim --version 2>&1 | head -1 | awk '{print $2}')
+  if [[ -n "$NVIM_VER" ]]; then
+    success "Neovim responde: $NVIM_VER"
+  fi
+  # Test 5: LazyVim config existe
+  if [[ -f "$HOME/.config/nvim/lua/config/lazy.lua" ]]; then
+    success "LazyVim config presente"
+  else
+    warn "❌ LazyVim config no encontrada en ~/.config/nvim"
+    VERIFY_FAILED=$((VERIFY_FAILED + 1))
+  fi
+fi
+
+# Test 6: Oh-My-Zsh + plugins
+if [[ -d "$HOME/.oh-my-zsh" ]]; then
+  success "Oh-My-Zsh instalado"
+  for plugin in zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting; do
+    if [[ -d "$HOME/.oh-my-zsh/custom/plugins/$plugin" ]]; then
+      success "Plugin zsh: $plugin"
+    else
+      warn "❌ Plugin zsh faltante: $plugin"
+      VERIFY_FAILED=$((VERIFY_FAILED + 1))
+    fi
+  done
+fi
+
+# Test 7: Tailscale
+if command -v tailscale &>/dev/null; then
+  if tailscale status &>/dev/null 2>&1; then
+    TS_IP=$(tailscale ip -4 2>/dev/null | head -1)
+    success "Tailscale autenticado: ${TS_IP:-conectado}"
+  else
+    info "Tailscale instalado pero no autenticado. Ejecuta: tailscale up"
+  fi
+fi
+
+# Test 8: DNS fix aplicado
+if [[ -f /etc/resolv.conf ]] && grep -q "100.100.100.100" /etc/resolv.conf 2>/dev/null; then
+  success "DNS fix Tailscale aplicado"
+fi
+
 # --- Resumen final ---
 header "Bootstrap completo"
 
-cat <<SUMMARY
-${GREEN}============================================${NC}
-${GREEN}  Sistema configurado correctamente${NC}
-${GREEN}============================================${NC}
+if [[ $VERIFY_FAILED -gt 0 ]]; then
+  warn "Hubo $VERIFY_FAILED advertencia(s) — revisa arriba"
+else
+  success "Todas las verificaciones pasaron ✓"
+fi
 
-Software instalado:
-  - zsh $(zsh --version 2>&1 | awk '{print $2}')
-  - git $(git --version 2>&1 | awk '{print $3}')
-  - nvim $(nvim --version 2>&1 | head -1 | awk '{print $2}')
-  - docker $(docker --version 2>&1 | awk '{print $3}' | tr -d ',')
-  - tailscale $(tailscale --version 2>&1 | head -1 | awk '{print $1}')
-
-Dotfiles:
-  ~/.zshrc         -> ${DOTFILES_DIR}/.zshrc
-  ~/.config/nvim   -> ${DOTFILES_DIR}/.config/nvim
-
-Próximos pasos:
-  1. ${CYAN}Reinicia sesión${NC} (o exec zsh)
-  2. ${CYAN}nvim${NC} — LazyVim instala plugins automáticamente
-  3. Si Tailscale no se autenticó: ${CYAN}tailscale up${NC}
-  4. Verifica: ${CYAN}docker ps${NC}, ${CYAN}tailscale status${NC}
-
-Repo: https://github.com/${GITHUB_USER}/${GITHUB_REPO}
-SUMMARY
+# Construir summary línea por línea con echo -e (interpreta \033)
+echo ""
+echo -e "${GREEN}============================================${NC}"
+echo -e "${GREEN}  Sistema configurado correctamente${NC}"
+echo -e "${GREEN}============================================${NC}"
+echo ""
+echo "Software instalado:"
+echo "  - zsh    $(zsh --version 2>&1 | awk '{print $2}')"
+echo "  - git    $(git --version 2>&1 | awk '{print $3}')"
+echo "  - nvim   $(nvim --version 2>&1 | head -1 | awk '{print $2}')"
+if command -v docker &>/dev/null; then
+  echo "  - docker $(docker --version 2>&1 | awk '{print $3}' | tr -d ',')"
+fi
+if command -v tailscale &>/dev/null; then
+  echo "  - tailscale $(tailscale --version 2>&1 | head -1 | awk '{print $1}')"
+fi
+echo ""
+echo "Dotfiles:"
+echo "  ~/.zshrc         -> ${DOTFILES_DIR}/.zshrc"
+echo "  ~/.config/nvim   -> ${DOTFILES_DIR}/.config/nvim"
+echo ""
+echo -e "Próximos pasos:"
+echo -e "  1. ${CYAN}Reinicia sesión${NC} (o ejecuta: exec zsh)"
+echo -e "  2. ${CYAN}nvim${NC} — LazyVim instala plugins al primer arranque"
+echo "  3. Si Tailscale no se autenticó: tailscale up"
+echo -e "  4. Verifica: ${CYAN}docker ps${NC}, ${CYAN}tailscale status${NC}"
+echo ""
+echo "Repo: https://github.com/${GITHUB_USER}/${GITHUB_REPO}"
+echo ""
 
 success "Hecho. Bienvenido al sistema, ${USER}."
