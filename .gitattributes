@@ -1,0 +1,12 @@
+# Force LF line endings for shell scripts and dotfiles.
+# Without this, files edited on Windows or with certain editors get
+# CRLF endings and break when piped to bash on Linux:
+#   bash: línea 14: $'\r': orden no encontrada
+# See: https://docs.github.com/en/get-started/getting-started-with-git/configuring-git-to-handle-line-endings
+*.sh        text eol=lf
+*.zshrc     text eol=lf
+*.bashrc    text eol=lf
+*.bash      text eol=lf
+README.md   text eol=lf
+*.lua       text eol=lf
+*.vim       text eol=lf
