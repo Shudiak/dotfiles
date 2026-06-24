@@ -124,6 +124,15 @@ if [[ $FREE_GB -lt 3 ]]; then
 fi
 success "Disco libre: ${FREE_GB} GB"
 
+# --- Detectar versión de OS (Rocky/RHEL major version) ---
+# Se hace ANTES de EPEL para que esté disponible en la condición -ge 9
+OS_MAJOR="0"
+if [[ -f /etc/os-release ]]; then
+  . /etc/os-release
+  OS_MAJOR="${VERSION_ID%%.*}"
+fi
+info "OS major version: $OS_MAJOR"
+
 # --- Habilitar EPEL (necesario para xclip, xauth, htop, tmux, nmap) ---
 header "Habilitando EPEL"
 
@@ -180,14 +189,6 @@ else
   error "Ni dnf ni yum disponibles. OS no soportado."
 fi
 info "Package manager: $PM (DNF$DNF_VERSION)"
-
-# Detectar versión de OS (Rocky/RHEL major version)
-OS_MAJOR="0"
-if [[ -f /etc/os-release ]]; then
-  . /etc/os-release
-  OS_MAJOR="${VERSION_ID%%.*}"
-fi
-info "OS major version: $OS_MAJOR"
 
 info "Instalando: ${PACKAGES_SYSTEM[*]}"
 $PM install -y "${PACKAGES_SYSTEM[@]}"
@@ -308,7 +309,8 @@ if [[ $INSTALL_ZSH == true ]]; then
     if [[ "$CURRENT_OMZ_SHA" != "$OMZ_PINNED_SHA" ]]; then
       info "Oh-My-Zsh en SHA $CURRENT_OMZ_SHA, actualizando a pinneado $OMZ_PINNED_SHA..."
       cd "$HOME/.oh-my-zsh" || error "No se pudo entrar a $HOME/.oh-my-zsh"
-      git fetch origin --depth 1 "$OMZ_PINNED_SHA" 2>/dev/null || git fetch origin
+      # Intentar fetch del SHA específico; si falla, fetch completo; ignorar exit codes
+      git fetch origin --depth 1 "$OMZ_PINNED_SHA" 2>/dev/null || git fetch origin 2>/dev/null || true
       git checkout -q "$OMZ_PINNED_SHA" 2>/dev/null || {
         warn "No se pudo checkout pinneado, re-clonando..."
         cd "$HOME" && rm -rf "$HOME/.oh-my-zsh"
@@ -392,7 +394,10 @@ mkdir -p "$HOME/.config"
 safe_symlink() {
   local target="$1"
   local link="$2"
-  [[ ! -e "$target" ]] && { warn "Source no existe: $target"; return 1; }
+  if [[ ! -e "$target" ]]; then
+    warn "Source no existe: $target"
+    return 0  # No matar el script con set -e
+  fi
   if [[ -L "$link" ]] && [[ "$(readlink -f "$link")" == "$(readlink -f "$target")" ]]; then
     info "Symlink ya correcto: $link"
     return 0
