@@ -364,8 +364,21 @@ header "Aplicando dotfiles desde ${GITHUB_USER}/${GITHUB_REPO}"
 
 DOTFILES_DIR="$HOME/.dotfiles"
 if [[ -d "$DOTFILES_DIR" ]]; then
-  warn "$DOTFILES_DIR ya existe, haciendo backup"
-  mv "$DOTFILES_DIR" "${DOTFILES_DIR}.bak.$(date +%Y%m%d_%H%M%S)"
+  # Detectar bare repo corrupto (sin working tree)
+  # Un bare repo tiene HEAD/refs/objects pero NO archivos de dotfiles
+  IS_BARE_REPO=false
+  if [[ -d "$DOTFILES_DIR/.git" ]] || \
+     ([[ -f "$DOTFILES_DIR/HEAD" ]] && [[ -d "$DOTFILES_DIR/objects" ]] && [[ ! -f "$DOTFILES_DIR/.zshrc" ]]); then
+    IS_BARE_REPO=true
+  fi
+
+  if [[ $IS_BARE_REPO == true ]]; then
+    warn "$DOTFILES_DIR es un bare repo corrupto (sin working tree), eliminando"
+    rm -rf "$DOTFILES_DIR"
+  else
+    warn "$DOTFILES_DIR ya existe, haciendo backup"
+    mv "$DOTFILES_DIR" "${DOTFILES_DIR}.bak.$(date +%Y%m%d_%H%M%S)"
+  fi
 fi
 
 git clone --depth 1 --branch "${GITHUB_BRANCH}" \
@@ -373,8 +386,26 @@ git clone --depth 1 --branch "${GITHUB_BRANCH}" \
 
 info "Creando symlinks para config files..."
 mkdir -p "$HOME/.config"
-[[ -f "$DOTFILES_DIR/.zshrc" ]] && ln -sf "$DOTFILES_DIR/.zshrc" "$HOME/.zshrc"
-[[ -d "$DOTFILES_DIR/.config/nvim" ]] && ln -sfn "$DOTFILES_DIR/.config/nvim" "$HOME/.config/nvim"
+
+# Helper: crear symlink robusto. Si destino existe como archivo regular,
+# hacer backup antes. Si ya es symlink correcto, skip.
+safe_symlink() {
+  local target="$1"
+  local link="$2"
+  [[ ! -e "$target" ]] && { warn "Source no existe: $target"; return 1; }
+  if [[ -L "$link" ]] && [[ "$(readlink -f "$link")" == "$(readlink -f "$target")" ]]; then
+    info "Symlink ya correcto: $link"
+    return 0
+  fi
+  if [[ -e "$link" ]] && [[ ! -L "$link" ]]; then
+    warn "Backup de $link (archivo regular) → ${link}.bak.$(date +%Y%m%d_%H%M%S)"
+    mv "$link" "${link}.bak.$(date +%Y%m%d_%H%M%S)"
+  fi
+  ln -sfn "$target" "$link"
+}
+
+safe_symlink "$DOTFILES_DIR/.zshrc" "$HOME/.zshrc"
+safe_symlink "$DOTFILES_DIR/.config/nvim" "$HOME/.config/nvim"
 success "Dotfiles aplicados (symlinks en ~/)"
 
 # --- SELinux: contexto para volúmenes Docker ---

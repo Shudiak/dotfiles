@@ -67,8 +67,9 @@ setopt EXTENDED_GLOB     # glob avanzado
 setopt NO_CASE_GLOB      # case-insensitive glob
 
 # === Prompt customization (agnoster compatible) ===
-# Muestra user@host en verde/rojo según root
-[ "$USER" = "root" ] && PROMPT_COLOR="red" || PROMPT_COLOR="green"
+# Muestra user@host en verde/negro según root
+# black para root (limpio), green para usuarios normales
+[ "$USER" = "root" ] && PROMPT_COLOR="black" || PROMPT_COLOR="green"
 prompt_context() {
   if [[ "$USER" != "$DEFAULT_USER" || -n "$SSH_CLIENT" ]]; then
     prompt_segment $PROMPT_COLOR black "%(!.%{%F{yellow}%}.)%n@%m"
