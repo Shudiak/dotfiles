@@ -133,6 +133,26 @@ if [[ -f /etc/os-release ]]; then
 fi
 info "OS major version: $OS_MAJOR"
 
+# Detectar package manager y versión
+if command -v dnf5 &>/dev/null; then
+  PM="dnf5"
+  DNF_VERSION="5"
+elif command -v dnf &>/dev/null; then
+  # dnf puede ser DNF4 (alias) o DNF5 (real)
+  if dnf --version 2>/dev/null | head -1 | grep -q "dnf5"; then
+    PM="dnf5"
+    DNF_VERSION="5"
+  else
+    PM="dnf"
+    DNF_VERSION="4"
+  fi
+elif command -v yum &>/dev/null; then
+  PM="yum"
+  DNF_VERSION="4"
+else
+  error "Ni dnf ni yum disponibles. OS no soportado."
+fi
+info "Package manager: $PM (DNF$DNF_VERSION)"
 # --- Habilitar EPEL (necesario para xclip, xauth, htop, tmux, nmap) ---
 header "Habilitando EPEL"
 
@@ -169,26 +189,6 @@ else
   info "Sin display gráfico — omitiendo xclip + xorg-x11-xauth"
 fi
 
-# Detectar package manager y versión
-if command -v dnf5 &>/dev/null; then
-  PM="dnf5"
-  DNF_VERSION="5"
-elif command -v dnf &>/dev/null; then
-  # dnf puede ser DNF4 (alias) o DNF5 (real)
-  if dnf --version 2>/dev/null | head -1 | grep -q "dnf5"; then
-    PM="dnf5"
-    DNF_VERSION="5"
-  else
-    PM="dnf"
-    DNF_VERSION="4"
-  fi
-elif command -v yum &>/dev/null; then
-  PM="yum"
-  DNF_VERSION="4"
-else
-  error "Ni dnf ni yum disponibles. OS no soportado."
-fi
-info "Package manager: $PM (DNF$DNF_VERSION)"
 
 info "Instalando: ${PACKAGES_SYSTEM[*]}"
 $PM install -y "${PACKAGES_SYSTEM[@]}"
@@ -579,4 +579,4 @@ echo ""
 echo "Repo: https://github.com/${GITHUB_USER}/${GITHUB_REPO}"
 echo ""
 
-success "Hecho. Bienvenido al sistema, ${USER}."
+success "Hecho. Bienvenido al sistema, ${USER}."# 
