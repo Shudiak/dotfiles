@@ -497,6 +497,14 @@ if command -v nvim &>/dev/null; then
     warn "❌ LazyVim config no encontrada en ~/.config/nvim"
     VERIFY_FAILED=$((VERIFY_FAILED + 1))
   fi
+  # Test 5b: Clipboard OSC 52 configurado
+  if grep -q 'vim.g.clipboard.*=.*"osc52"' "$HOME/.config/nvim/lua/config/options.lua" 2>/dev/null; then
+    success "Clipboard OSC 52 configurado (vim.g.clipboard = osc52)"
+  else
+    warn "⚠️  Clipboard OSC 52 NO configurado (puede fallar yank en headless)"
+    info "  Solución: agregar 'vim.g.clipboard = \"osc52\"' en lua/config/options.lua"
+    VERIFY_FAILED=$((VERIFY_FAILED + 1))
+  fi
 fi
 
 # Test 6: Oh-My-Zsh + plugins
