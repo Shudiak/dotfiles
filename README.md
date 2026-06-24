@@ -40,7 +40,7 @@ El script instala **29 paquetes + 1 servicio** distribuidos así:
 |---|---|---|
 | `zsh` | 5.5.1 | Shell default (cambia con `chsh`) |
 | `vim` | latest | Editor fallback |
-| `Oh-My-Zsh` | latest | Framework de zsh |
+| `Oh-My-Zsh` | pinned `df34d2b` (15 jun 2026) | Framework de zsh — versión fija para reproducibilidad |
 | `zsh-autosuggestions` | plugin | Sugerencias inline basadas en history |
 | `zsh-syntax-highlighting` | plugin | Coloreado de comandos en tiempo real |
 | `fast-syntax-highlighting` | plugin | Syntax highlighting de URLs, paths, etc. |
@@ -283,6 +283,7 @@ nvim                            # Abre nvim, deja que LazyVim instale
 - **Idempotente**: puedes correr el script múltiples veces sin romper nada (detecta lo instalado).
 - **No destructivo**: hace backup de `~/.dotfiles` si ya existe antes de clonar.
 - **Symlinks, no copias**: edita los archivos en `~/.dotfiles/` y los cambios se reflejan en `~/`.
+- **Reproducible**: Oh-My-Zsh está pineado a un SHA fijo (`df34d2b`, 15 jun 2026) para que todos los servers tengan la misma versión de agnoster y plugins. Cambiar manualmente cuando se quiera actualizar.
 - **Tailscale requiere acción manual**: tras bootstrap, corre `tailscale up` o usa `--tailscale-key`.
 
 ---

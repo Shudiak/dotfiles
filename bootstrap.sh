@@ -73,6 +73,12 @@ GENERATE_SSH=false
 NVIM_VERSION="v0.12.3"
 TAILSCALE_AUTH_KEY=""
 
+# Oh-My-Zsh pinned SHA — garantiza que todos los servers (netwise-sed,
+# Rocky 10.2, futuros clientes) tengan exactamente la misma versión de OMZ
+# y por lo tanto el mismo tema agnoster, plugins, etc.
+# Update policy: bumpear manualmente cuando se quiera actualizar.
+OMZ_PINNED_SHA="df34d2b8d575777465aed8ae9b7cd90d63fdcd6e"
+
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -296,6 +302,24 @@ if [[ $INSTALL_ZSH == true ]]; then
   if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
     info "Instalando Oh-My-Zsh..."
     RUNZSH=no CHSH=no sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+  else
+    # Si ya existe, asegurar que esté en el SHA pinneado (idempotente + reproducible)
+    CURRENT_OMZ_SHA=$(cd "$HOME/.oh-my-zsh" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+    if [[ "$CURRENT_OMZ_SHA" != "$OMZ_PINNED_SHA" ]]; then
+      info "Oh-My-Zsh en SHA $CURRENT_OMZ_SHA, actualizando a pinneado $OMZ_PINNED_SHA..."
+      cd "$HOME/.oh-my-zsh" || error "No se pudo entrar a $HOME/.oh-my-zsh"
+      git fetch origin --depth 1 "$OMZ_PINNED_SHA" 2>/dev/null || git fetch origin
+      git checkout -q "$OMZ_PINNED_SHA" 2>/dev/null || {
+        warn "No se pudo checkout pinneado, re-clonando..."
+        cd "$HOME" && rm -rf "$HOME/.oh-my-zsh"
+        git clone --depth 1 https://github.com/ohmyzsh/ohmyzsh.git "$HOME/.oh-my-zsh"
+        cd "$HOME/.oh-my-zsh" && git checkout -q "$OMZ_PINNED_SHA"
+      }
+      cd "$HOME" >/dev/null
+      success "Oh-My-Zsh pineado a $OMZ_PINNED_SHA"
+    else
+      info "Oh-My-Zsh ya en SHA pinneado ($OMZ_PINNED_SHA)"
+    fi
   fi
   success "Oh-My-Zsh en $HOME/.oh-my-zsh"
   
